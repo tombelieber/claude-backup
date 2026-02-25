@@ -98,7 +98,103 @@ check_requirements() {
 # --- Subcommand dispatch (placeholder — filled in next tasks) ---
 
 cmd_init() { echo "TODO: init"; }
-cmd_sync() { echo "TODO: sync"; }
+cmd_sync() {
+  if [ ! -d "$BACKUP_DIR/.git" ]; then
+    fail "Not initialized. Run: claude-session-backup init"
+  fi
+  if [ ! -d "$SOURCE_DIR" ]; then
+    fail "Claude sessions directory not found: $SOURCE_DIR"
+  fi
+
+  log "Starting backup..."
+  printf "\n${BOLD}Syncing Claude sessions...${NC}\n\n"
+
+  local added=0 updated=0 removed=0
+  local total_sessions=0 total_projects=0
+
+  # Count totals for progress
+  total_projects=$(find "$SOURCE_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
+  total_sessions=$(find "$SOURCE_DIR" -name "*.jsonl" 2>/dev/null | wc -l | tr -d ' ')
+  step "Found $total_sessions sessions across $total_projects projects"
+  printf "\n"
+
+  # Sync each project directory
+  while IFS= read -r -d '' project_dir; do
+    local project_name
+    project_name=$(basename "$project_dir")
+    local dest_project="$DEST_DIR/$project_name"
+    mkdir -p "$dest_project"
+
+    # Compress JSONL files
+    while IFS= read -r -d '' jsonl_file; do
+      local filename gz_dest
+      filename=$(basename "$jsonl_file")
+      gz_dest="$dest_project/${filename}.gz"
+
+      if [ -f "$gz_dest" ] && [ "$jsonl_file" -ot "$gz_dest" ]; then
+        continue
+      fi
+
+      gzip -cn "$jsonl_file" > "$gz_dest"
+      ((added++)) || true
+    done < <(find "$project_dir" -maxdepth 1 -name "*.jsonl" -print0 2>/dev/null)
+
+    # Copy non-JSONL files as-is
+    while IFS= read -r -d '' other_file; do
+      local filename dest_file
+      filename=$(basename "$other_file")
+      dest_file="$dest_project/$filename"
+
+      if [ -f "$dest_file" ] && [ "$other_file" -ot "$dest_file" ]; then
+        continue
+      fi
+
+      cp "$other_file" "$dest_file"
+      ((updated++)) || true
+    done < <(find "$project_dir" -maxdepth 1 -type f ! -name "*.jsonl" -print0 2>/dev/null)
+
+  done < <(find "$SOURCE_DIR" -mindepth 1 -maxdepth 1 -type d -print0)
+
+  # Remove deleted projects
+  if [ -d "$DEST_DIR" ]; then
+    while IFS= read -r -d '' backup_project; do
+      local project_name
+      project_name=$(basename "$backup_project")
+      if [ ! -d "$SOURCE_DIR/$project_name" ]; then
+        log "Removing deleted project: $project_name"
+        rm -rf "$backup_project"
+        ((removed++)) || true
+      fi
+    done < <(find "$DEST_DIR" -mindepth 1 -maxdepth 1 -type d -print0)
+  fi
+
+  info "Compressed: $added, copied: $updated, removed: $removed"
+  log "Processed: $added compressed, $updated copied, $removed removed"
+
+  # Commit and push
+  cd "$BACKUP_DIR"
+  git add -A
+
+  if git diff --cached --quiet; then
+    info "No changes — already up to date"
+    return 0
+  fi
+
+  local file_count total_size
+  file_count=$(git diff --cached --numstat | wc -l | tr -d ' ')
+  total_size=$(du -sh "$DEST_DIR" 2>/dev/null | cut -f1)
+
+  step "Committing $file_count files ($total_size total)..."
+  git commit -q -m "backup $(date '+%Y-%m-%d %H:%M') — $file_count files, $total_size total"
+  printf "${GREEN}✓${NC}\n"
+
+  step "Pushing to GitHub..."
+  git push -q 2>/dev/null
+  printf "${GREEN}✓${NC}\n"
+
+  log "Backup pushed successfully"
+  printf "\n${GREEN}${BOLD}Done!${NC} Backup complete.\n"
+}
 cmd_status() { echo "TODO: status"; }
 cmd_restore() { echo "TODO: restore"; }
 cmd_uninstall() { echo "TODO: uninstall"; }
