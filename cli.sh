@@ -340,7 +340,57 @@ cmd_sync() {
   log "Backup pushed successfully"
   printf "\n${GREEN}${BOLD}Done!${NC} Backup complete.\n"
 }
-cmd_status() { echo "TODO: status"; }
+cmd_status() {
+  printf "\n${BOLD}Claude Session Backup${NC} v$VERSION\n\n"
+
+  if [ ! -d "$BACKUP_DIR/.git" ]; then
+    fail "Not initialized. Run: claude-session-backup init"
+  fi
+
+  # Remote URL
+  local remote_url
+  remote_url=$(cd "$BACKUP_DIR" && git remote get-url origin 2>/dev/null || echo "unknown")
+  printf "  ${BOLD}Repo:${NC}       $remote_url\n"
+
+  # Last backup time
+  local last_commit
+  last_commit=$(cd "$BACKUP_DIR" && git log -1 --format="%ar (%ci)" 2>/dev/null || echo "never")
+  printf "  ${BOLD}Last backup:${NC} $last_commit\n"
+
+  # Backup size
+  if [ -d "$DEST_DIR" ]; then
+    local backup_size
+    backup_size=$(du -sh "$DEST_DIR" 2>/dev/null | cut -f1)
+    printf "  ${BOLD}Backup size:${NC} $backup_size (compressed)\n"
+  fi
+
+  # Source size
+  if [ -d "$SOURCE_DIR" ]; then
+    local source_size session_count project_count
+    source_size=$(du -sh "$SOURCE_DIR" 2>/dev/null | cut -f1)
+    session_count=$(find "$SOURCE_DIR" -name "*.jsonl" 2>/dev/null | wc -l | tr -d ' ')
+    project_count=$(find "$SOURCE_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
+    printf "  ${BOLD}Source size:${NC}  $source_size ($session_count sessions, $project_count projects)\n"
+  fi
+
+  # Scheduler status
+  if launchctl list 2>/dev/null | grep -q "$PLIST_NAME"; then
+    printf "  ${BOLD}Scheduler:${NC}   ${GREEN}active${NC} (daily at 3:00 AM)\n"
+  else
+    printf "  ${BOLD}Scheduler:${NC}   ${YELLOW}inactive${NC}\n"
+  fi
+
+  # Last log entry
+  if [ -f "$LOG_FILE" ]; then
+    local last_log
+    last_log=$(tail -1 "$LOG_FILE" 2>/dev/null || echo "")
+    if [ -n "$last_log" ]; then
+      printf "  ${BOLD}Last log:${NC}    ${DIM}$last_log${NC}\n"
+    fi
+  fi
+
+  printf "\n"
+}
 cmd_restore() { echo "TODO: restore"; }
 cmd_uninstall() { echo "TODO: uninstall"; }
 
