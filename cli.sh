@@ -447,7 +447,34 @@ cmd_restore() {
   info "Session restored: $target_file"
   printf "\n"
 }
-cmd_uninstall() { echo "TODO: uninstall"; }
+cmd_uninstall() {
+  printf "\n${BOLD}Uninstalling Claude Session Backup${NC}\n\n"
+
+  # Remove launchd schedule
+  if [ -f "$PLIST_PATH" ]; then
+    launchctl unload "$PLIST_PATH" 2>/dev/null || true
+    rm -f "$PLIST_PATH"
+    info "Removed daily schedule"
+  else
+    info "No schedule found"
+  fi
+
+  # Ask about data
+  if [ -d "$BACKUP_DIR" ]; then
+    printf "\n  Local backup data at: ${DIM}$BACKUP_DIR${NC}\n"
+    printf "  ${YELLOW}Delete local backup data?${NC} [y/N] "
+    read -r answer
+    if [[ "$answer" =~ ^[Yy]$ ]]; then
+      rm -rf "$BACKUP_DIR"
+      info "Deleted $BACKUP_DIR"
+    else
+      info "Kept $BACKUP_DIR"
+    fi
+  fi
+
+  printf "\n${DIM}Note: Your GitHub repo was not deleted.${NC}\n"
+  printf "${DIM}Delete manually: gh repo delete $DATA_REPO_NAME${NC}\n\n"
+}
 
 case "${1:-}" in
   init|"")       cmd_init ;;
