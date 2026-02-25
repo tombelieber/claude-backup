@@ -391,7 +391,62 @@ cmd_status() {
 
   printf "\n"
 }
-cmd_restore() { echo "TODO: restore"; }
+cmd_restore() {
+  local uuid="${1:-}"
+
+  if [ -z "$uuid" ]; then
+    printf "\n${BOLD}Usage:${NC} claude-session-backup restore <session-uuid>\n\n"
+    printf "  Find session UUIDs with:\n"
+    printf "    ls ~/.claude-backup/projects/*/\n\n"
+    return 1
+  fi
+
+  if [ ! -d "$DEST_DIR" ]; then
+    fail "No backups found. Run: claude-session-backup init"
+  fi
+
+  # Find matching .gz files
+  local matches
+  matches=$(find "$DEST_DIR" -name "*${uuid}*" -type f 2>/dev/null)
+
+  if [ -z "$matches" ]; then
+    fail "No backup found matching: $uuid"
+  fi
+
+  local match_count
+  match_count=$(echo "$matches" | wc -l | tr -d ' ')
+
+  if [ "$match_count" -gt 1 ]; then
+    printf "\n${YELLOW}Multiple matches found:${NC}\n"
+    echo "$matches" | while read -r f; do
+      printf "  %s\n" "$f"
+    done
+    printf "\nProvide a more specific UUID.\n\n"
+    return 1
+  fi
+
+  local gz_file="$matches"
+  local filename project_dir
+  filename=$(basename "$gz_file" .gz)
+  project_dir=$(basename "$(dirname "$gz_file")")
+
+  local target_dir="$SOURCE_DIR/$project_dir"
+  local target_file="$target_dir/$filename"
+
+  printf "\n${BOLD}Restoring session:${NC}\n"
+  printf "  ${DIM}From:${NC} $gz_file\n"
+  printf "  ${DIM}To:${NC}   $target_file\n\n"
+
+  if [ -f "$target_file" ]; then
+    warn "File already exists at destination (will not overwrite)"
+    return 1
+  fi
+
+  mkdir -p "$target_dir"
+  gzip -dkc "$gz_file" > "$target_file"
+  info "Session restored: $target_file"
+  printf "\n"
+}
 cmd_uninstall() { echo "TODO: uninstall"; }
 
 case "${1:-}" in
