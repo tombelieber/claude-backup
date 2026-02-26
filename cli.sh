@@ -888,6 +888,9 @@ cmd_sync() {
 
   local mode="${BACKUP_MODE:-$(read_backup_mode)}"
   if [ "$mode" != "local" ]; then
+    # Pull before push to handle concurrent multi-machine updates
+    git pull --rebase -q 2>/dev/null || true
+
     step "Pushing to remote..."
     local push_output
     if ! push_output=$(git push -u origin HEAD -q 2>&1); then
@@ -902,6 +905,20 @@ cmd_sync() {
     json_pushed=true
   else
     log "Backup committed locally (local mode — no push)"
+  fi
+
+  # Periodic git housekeeping (runs only when git decides it's needed)
+  git gc --auto -q 2>/dev/null || true
+
+  # Size warning for remote modes (GitHub soft limit is 5GB)
+  if [ "$mode" != "local" ]; then
+    local total_bytes
+    total_bytes=$(dir_bytes "$BACKUP_DIR")
+    if [ "$total_bytes" -gt 2147483648 ]; then  # 2 GB
+      local total_mb=$(( total_bytes / 1048576 ))
+      warn "Backup size is ${total_mb} MB. Remote repos typically have a 5 GB soft limit."
+      warn "Consider pruning old sessions: claude-backup prune --older-than 6m"
+    fi
   fi
 
   if [ "$JSON_OUTPUT" = true ]; then
