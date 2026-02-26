@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="2.0.0"
+VERSION="3.0.0"
 BACKUP_DIR="$HOME/.claude-backup"
 SOURCE_DIR="$HOME/.claude/projects"
 CLAUDE_DIR="$HOME/.claude"
