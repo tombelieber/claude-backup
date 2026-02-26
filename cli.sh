@@ -584,24 +584,46 @@ build_session_index() {
   resolve_dest_dir
   # Scans session projects dir and writes session-index.json.
   # One entry per *.jsonl.gz file. Sorted newest-first by backedUpAt.
+  # v3.2: scans machines/*/projects/ for cross-machine search.
   # v4: also scan *.jsonl.age.gz when encryption is added.
   local index_file="$BACKUP_DIR/session-index.json"
   local entries=""
   local count=0
 
+  # Determine scan path: machines/*/projects/ if available, else flat DEST_DIR
+  local scan_path="$DEST_DIR"
+  if [ -d "$BACKUP_DIR/machines" ]; then
+    scan_path="$BACKUP_DIR/machines"
+  fi
+
   while IFS= read -r -d '' gz_file; do
-    local filename project_hash uuid size_bytes mod_time
+    local filename project_hash uuid size_bytes mod_time machine_field
     filename=$(basename "$gz_file")
     project_hash=$(basename "$(dirname "$gz_file")")
     uuid="${filename%.jsonl.gz}"
     size_bytes=$(stat -f %z "$gz_file" 2>/dev/null || echo 0)
     mod_time=$(date -u -r "$gz_file" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo "unknown")
 
+    # Extract machine slug from path: .../machines/<slug>/projects/<project>/<file>
+    machine_field=""
+    if [ -d "$BACKUP_DIR/machines" ]; then
+      # Path is: $BACKUP_DIR/machines/<slug>/projects/<hash>/<file>
+      # Go up 3 levels from file to get machine slug
+      local machine_dir
+      machine_dir=$(dirname "$(dirname "$(dirname "$gz_file")")")
+      machine_field=$(basename "$machine_dir")
+    fi
+
     [ $count -gt 0 ] && entries="${entries},"
-    entries="${entries}
+    if [ -n "$machine_field" ]; then
+      entries="${entries}
+    {\"uuid\":\"${uuid}\",\"projectHash\":\"${project_hash}\",\"machine\":\"${machine_field}\",\"sizeBytes\":${size_bytes},\"backedUpAt\":\"${mod_time}\"}"
+    else
+      entries="${entries}
     {\"uuid\":\"${uuid}\",\"projectHash\":\"${project_hash}\",\"sizeBytes\":${size_bytes},\"backedUpAt\":\"${mod_time}\"}"
+    fi
     ((count++)) || true  # || true: (( )) exits 1 when result is 0; guards against set -e
-  done < <(find "$DEST_DIR" -name "*.jsonl.gz" -type f -print0 2>/dev/null)
+  done < <(find "$scan_path" -name "*.jsonl.gz" -type f -print0 2>/dev/null)
 
   if [ $count -eq 0 ]; then
     cat > "$index_file" <<INDEX
@@ -1035,7 +1057,7 @@ cmd_restore() {
     ((i++)) || true
   done
 
-  if [ ! -d "$DEST_DIR" ]; then
+  if [ ! -d "$DEST_DIR" ] && [ ! -d "$BACKUP_DIR/machines" ]; then
     fail "No backups found. Run: claude-backup sync"
   fi
 
@@ -1110,8 +1132,13 @@ cmd_restore() {
     fail "Invalid session identifier: $uuid"
   fi
 
+  # Search across all machine namespaces (v3.2) or flat layout (v3.0)
+  local search_path="$DEST_DIR"
+  if [ -d "$BACKUP_DIR/machines" ]; then
+    search_path="$BACKUP_DIR/machines"
+  fi
   local matches
-  matches=$(find "$DEST_DIR" -name "*${uuid}*.gz" -type f 2>/dev/null)
+  matches=$(find "$search_path" -name "*${uuid}*.gz" -type f 2>/dev/null)
 
   if [ -z "$matches" ]; then
     fail "No backup found matching: $uuid"
@@ -1181,8 +1208,13 @@ cmd_peek() {
     fail "Invalid session identifier: $uuid"
   fi
 
+  # Search across all machine namespaces (v3.2) or flat layout (v3.0)
+  local search_path="$DEST_DIR"
+  if [ -d "$BACKUP_DIR/machines" ]; then
+    search_path="$BACKUP_DIR/machines"
+  fi
   local matches
-  matches=$(find "$DEST_DIR" -name "*${uuid}*.gz" -type f 2>/dev/null)
+  matches=$(find "$search_path" -name "*${uuid}*.gz" -type f 2>/dev/null)
 
   if [ -z "$matches" ]; then
     fail "No backup found matching: $uuid"
