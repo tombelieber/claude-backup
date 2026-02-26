@@ -1,16 +1,31 @@
+<div align="center">
+
 # claude-backup
 
 **Claude Code deletes your sessions after 30 days.**
+
+<p>
+  <a href="https://www.npmjs.com/package/claude-backup"><img src="https://img.shields.io/npm/v/claude-backup.svg" alt="npm version"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/Platform-macOS-lightgrey.svg" alt="macOS">
+  <a href="https://github.com/tombelieber/claude-backup/stargazers"><img src="https://img.shields.io/github/stars/tombelieber/claude-backup?style=social" alt="GitHub stars"></a>
+</p>
+
+</div>
 
 Every debugging session. Every architecture decision. Every prompt you spent an hour crafting. Gone.
 
 WhatsApp keeps your messages forever. Telegram keeps them forever. Discord keeps them forever. Claude Code — the tool you pay $20–200/mo for — gives you 30 days.
 
+<div align="center">
+
 ```bash
 npx claude-backup
 ```
 
-One command. Your sessions are safe. Auto-syncs daily.
+**One command. Your sessions are safe. Auto-syncs daily.**
+
+</div>
 
 ---
 
@@ -27,6 +42,8 @@ Each session is:
 
 You can't Google your own Claude sessions. Once they're gone, they're gone.
 
+---
+
 ## How It Works
 
 ```bash
@@ -41,6 +58,8 @@ Interactive setup:
 4. Schedules daily automatic backups (3:00 AM)
 
 That's it. Run it once, forget about it.
+
+---
 
 ## Get Your Sessions Back
 
@@ -65,11 +84,17 @@ claude-backup restore <uuid>
 
 The session index is auto-generated on every sync and rebuilt from the `*.jsonl.gz` files — you never need to manage it manually.
 
+---
+
 ## What Gets Saved
 
 **Config profile** — settings, CLAUDE.md, agents, hooks, skills, rules. Lightweight (< 100 KB), portable between machines.
 
 **Sessions archive** — all chat history, compressed with gzip. Your entire conversation history, safe in a private repo.
+
+<details>
+<summary><strong>Full backup manifest</strong></summary>
+<br>
 
 | Item | Source | Notes |
 | --- | --- | --- |
@@ -85,6 +110,10 @@ The session index is auto-generated on every sync and rebuilt from the `*.jsonl.
 | Command history | `history.jsonl` | CLI command history (gzipped) |
 
 All source paths are relative to `~/.claude/`.
+
+</details>
+
+---
 
 ## Machine Migration
 
@@ -103,6 +132,8 @@ npx claude-backup import-config claude-config-2026-02-25.tar.gz
 
 Plugins are not included in the export (they are re-downloaded on first launch). Only the plugin manifest in `settings.json` is backed up.
 
+---
+
 ## Local-Only Mode
 
 No GitHub account? No problem. Backups stay on your machine.
@@ -117,7 +148,24 @@ npx claude-backup --local
 
 Backups go to `~/.claude-backup/` as a local git repo. Everything works the same — sync, restore, peek, export/import.
 
-## Commands
+---
+
+## Claude Code Plugin
+
+Let Claude manage backups for you:
+
+```bash
+/plugin marketplace add tombelieber/claude-backup
+/plugin install claude-backup
+```
+
+The plugin teaches Claude the CLI commands. The agent always uses `--json` for structured output.
+
+---
+
+<details>
+<summary><strong>All Commands</strong></summary>
+<br>
 
 | Command | Description |
 | --- | --- |
@@ -140,26 +188,22 @@ Backups go to `~/.claude-backup/` as a local git repo. Everything works the same
 | `claude-backup <any> --json` | Structured JSON output (for scripts/agents) |
 | `claude-backup init --local` | Force local-only mode (no GitHub) |
 
-## Claude Code Plugin
+</details>
 
-Let Claude manage backups for you:
-
-```bash
-/plugin marketplace add tombelieber/claude-backup
-/plugin install claude-backup
-```
-
-The plugin teaches Claude the CLI commands. The agent always uses `--json` for structured output.
-
-## Security
+<details>
+<summary><strong>Security</strong></summary>
+<br>
 
 - **Credentials are never backed up.** `.credentials.json` and `.encryption_key` are hardcoded exclusions.
 - **GitHub repo is private** by default.
 - **`export-config` warns** if any file appears to contain sensitive content (tokens, secrets, passwords).
 - **`import-config` does not overwrite** existing credentials.
 
+</details>
+
 <details>
-<summary><strong>What's excluded</strong></summary>
+<summary><strong>What's Excluded</strong></summary>
+<br>
 
 | Item | Why |
 | --- | --- |
@@ -175,7 +219,8 @@ The plugin teaches Claude the CLI commands. The agent always uses `--json` for s
 </details>
 
 <details>
-<summary><strong>Storage layout</strong></summary>
+<summary><strong>Storage Layout</strong></summary>
+<br>
 
 ```text
 ~/.claude-backup/                   # Git repo -> private GitHub repo
@@ -205,7 +250,9 @@ The plugin teaches Claude the CLI commands. The agent always uses `--json` for s
 
 </details>
 
-## Requirements
+<details>
+<summary><strong>Requirements</strong></summary>
+<br>
 
 - **macOS** (Linux coming soon)
 - **git**
@@ -213,7 +260,11 @@ The plugin teaches Claude the CLI commands. The agent always uses `--json` for s
 - **python3** (built-in on macOS since Catalina)
 - **gh** ([GitHub CLI](https://cli.github.com)) — *optional*. Enables remote backup. Without it, backups are local-only.
 
-## Uninstall
+</details>
+
+<details>
+<summary><strong>Uninstall</strong></summary>
+<br>
 
 ```bash
 claude-backup uninstall
@@ -225,10 +276,26 @@ Removes the daily scheduler and optionally deletes local backup data. Delete the
 gh repo delete claude-backup-data
 ```
 
+</details>
+
+---
+
 ## Related
 
-- **[claude-view](https://github.com/tombelieber/claude-view)** — Mission Control for all your Claude Code sessions. `npx claude-view`
+- **[claude-view](https://github.com/tombelieber/claude-view)** — 10 Claude sessions running. What are they doing? `npx claude-view`
 
-## License
+---
+
+<div align="center">
+
+If **claude-backup** saves your sessions, consider giving it a star. It helps others discover this tool.
+
+<a href="https://github.com/tombelieber/claude-backup/stargazers">
+  <img src="https://img.shields.io/github/stars/tombelieber/claude-backup?style=for-the-badge&logo=github" alt="Star on GitHub">
+</a>
+
+<br><br>
 
 [MIT](LICENSE)
+
+</div>
