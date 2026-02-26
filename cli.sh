@@ -401,7 +401,12 @@ read_backup_mode() {
 
 machine_slug() {
   # Compute a filesystem-safe slug from the short hostname
-  hostname -s | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' | cut -c1-64
+  local slug
+  slug=$(hostname -s | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' | sed 's/^-*//; s/-*$//' | cut -c1-64)
+  if [ -z "$slug" ]; then
+    slug="unknown"
+  fi
+  echo "$slug"
 }
 
 get_machine_slug() {
@@ -880,7 +885,7 @@ cmd_status_json() {
 
   printf '{"version":"%s","mode":"%s","repo":%s,"lastBackup":"%s","backupSize":"%s","machine":"%s","machineSlug":"%s","config":{"files":%s,"size":"%s"},"sessions":{"files":%s,"projects":%s,"size":"%s"},"scheduler":"%s","index":{"sessions":%s}}\n' \
     "$VERSION" "$mode" "$repo" "$last_backup" "$backup_size" \
-    "$(json_escape "$(hostname)")" "$(get_machine_slug)" \
+    "$(json_escape "$(hostname)")" "$(json_escape "$(get_machine_slug)")" \
     "$config_files" "$config_size" "$session_files" "$session_projects" "$session_size" \
     "$scheduler" "$index_sessions"
 }
