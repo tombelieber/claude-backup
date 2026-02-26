@@ -149,22 +149,13 @@ detect_github_available() {
   return 0
 }
 
-schedule_launchd() {
-  # Resolve absolute path to cli.sh (works whether run via npx or direct)
-  local cli_path
-  cli_path=$(command -v claude-backup 2>/dev/null || echo "")
+# Generates a launchd plist XML for the given frequency. Outputs to stdout.
+# Args: $1 = frequency (daily|6h|hourly), $2 = cli_path
+generate_plist() {
+  local frequency="${1}"
+  local cli_path="${2}"
 
-  # Fallback: if run directly (not via npm bin), use the backup dir's copy
-  if [ -z "$cli_path" ] || [ ! -f "$cli_path" ]; then
-    # Copy cli.sh into backup dir so launchd has a stable path
-    cp "${BASH_SOURCE[0]}" "$BACKUP_DIR/cli.sh"
-    chmod +x "$BACKUP_DIR/cli.sh"
-    cli_path="$BACKUP_DIR/cli.sh"
-  fi
-
-  mkdir -p "$(dirname "$PLIST_PATH")"
-
-  cat > "$PLIST_PATH" <<PLIST
+  cat <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -177,6 +168,12 @@ schedule_launchd() {
         <string>$cli_path</string>
         <string>sync</string>
     </array>
+PLIST
+
+  # Frequency-specific schedule
+  case "$frequency" in
+    daily)
+      cat <<PLIST
     <key>StartCalendarInterval</key>
     <dict>
         <key>Hour</key>
@@ -184,6 +181,23 @@ schedule_launchd() {
         <key>Minute</key>
         <integer>0</integer>
     </dict>
+PLIST
+      ;;
+    6h)
+      cat <<PLIST
+    <key>StartInterval</key>
+    <integer>21600</integer>
+PLIST
+      ;;
+    hourly)
+      cat <<PLIST
+    <key>StartInterval</key>
+    <integer>3600</integer>
+PLIST
+      ;;
+  esac
+
+  cat <<PLIST
     <key>StandardOutPath</key>
     <string>$BACKUP_DIR/launchd-stdout.log</string>
     <key>StandardErrorPath</key>
@@ -196,6 +210,19 @@ schedule_launchd() {
 </dict>
 </plist>
 PLIST
+}
+
+schedule_launchd() {
+  local cli_path
+  cli_path=$(command -v claude-backup 2>/dev/null || echo "")
+  if [ -z "$cli_path" ] || [ ! -f "$cli_path" ]; then
+    cp "${BASH_SOURCE[0]}" "$BACKUP_DIR/cli.sh"
+    chmod +x "$BACKUP_DIR/cli.sh"
+    cli_path="$BACKUP_DIR/cli.sh"
+  fi
+
+  mkdir -p "$(dirname "$PLIST_PATH")"
+  generate_plist "daily" "$cli_path" > "$PLIST_PATH"
 
   local domain="gui/$(id -u)"
   launchctl bootout "$domain/$SERVICE_LABEL" 2>/dev/null || true
@@ -1382,6 +1409,108 @@ json.dump(m, open(path, 'w'), indent=2)
     printf '{"ok":true,"mode":"%s"}\n' "$target_mode"
   fi
 }
+
+cmd_schedule() {
+  local frequency="${1:-}"
+
+  if [ -z "$frequency" ]; then
+    if [ "$JSON_OUTPUT" = true ]; then
+      json_err '{"error":"Usage: claude-backup schedule <off|daily|6h|hourly>"}'
+    else
+      printf "\n${BOLD}Usage:${NC} claude-backup schedule <frequency>\n\n"
+      printf "  ${BOLD}Frequencies:${NC}\n"
+      printf "    off       Disable automatic backups\n"
+      printf "    daily     Daily at 3:00 AM\n"
+      printf "    6h        Every 6 hours\n"
+      printf "    hourly    Every hour\n\n"
+    fi
+    return 1
+  fi
+
+  case "$frequency" in
+    off|daily|6h|hourly) ;;
+    *) fail "Unknown frequency: $frequency. Use: off, daily, 6h, or hourly" ;;
+  esac
+
+  if [ ! -d "$BACKUP_DIR/.git" ]; then
+    fail "Not initialized. Run: claude-backup init"
+  fi
+
+  local domain="gui/$(id -u)"
+  local service_target="$domain/$SERVICE_LABEL"
+
+  # Handle "off" — stop and remove, then return
+  if [ "$frequency" = "off" ]; then
+    launchctl bootout "$service_target" 2>/dev/null || true
+    rm -f "$PLIST_PATH"
+    info "Automatic backups disabled."
+
+    # Update manifest
+    python3 -c "
+import json, sys
+path = sys.argv[1]
+m = json.load(open(path))
+m['schedule'] = 'off'
+json.dump(m, open(path, 'w'), indent=2)
+" "$BACKUP_DIR/manifest.json"
+
+    if [ "$JSON_OUTPUT" = true ]; then
+      printf '{"ok":true,"schedule":"off"}\n'
+    fi
+    return 0
+  fi
+
+  # Resolve CLI path for plist
+  local cli_path
+  cli_path=$(command -v claude-backup 2>/dev/null || echo "")
+  if [ -z "$cli_path" ] || [ ! -f "$cli_path" ]; then
+    cp "${BASH_SOURCE[0]}" "$BACKUP_DIR/cli.sh"
+    chmod +x "$BACKUP_DIR/cli.sh"
+    cli_path="$BACKUP_DIR/cli.sh"
+  fi
+
+  # 1. Stop old schedule
+  launchctl bootout "$service_target" 2>/dev/null || true
+
+  # 2. Generate plist with new frequency
+  generate_plist "$frequency" "$cli_path" > "$PLIST_PATH"
+
+  # 3. Validate plist XML
+  if ! plutil -lint "$PLIST_PATH" >/dev/null 2>&1; then
+    fail "Generated plist is invalid XML. Aborting."
+  fi
+
+  # 4. Register new schedule
+  launchctl bootstrap "$domain" "$PLIST_PATH"
+
+  # 5. Verify the agent is running
+  if ! launchctl print "$service_target" >/dev/null 2>&1; then
+    warn "Schedule registered but agent not running. Check: launchctl print $service_target"
+  fi
+
+  # Store frequency in manifest
+  python3 -c "
+import json, sys
+path = sys.argv[1]
+freq = sys.argv[2]
+m = json.load(open(path))
+m['schedule'] = freq
+json.dump(m, open(path, 'w'), indent=2)
+" "$BACKUP_DIR/manifest.json" "$frequency"
+
+  local freq_label
+  case "$frequency" in
+    daily)  freq_label="Daily at 3:00 AM" ;;
+    6h)     freq_label="Every 6 hours" ;;
+    hourly) freq_label="Every hour" ;;
+  esac
+  info "Automatic backups: $freq_label"
+
+  if [ "$JSON_OUTPUT" = true ]; then
+    printf '{"ok":true,"schedule":"%s"}\n' "$frequency"
+  fi
+}
+
 cmd_peek() {
   resolve_dest_dir
   local uuid="${1:-}"
@@ -1781,6 +1910,7 @@ case "${1:-}" in
   status)        cmd_status ;;
   restore)       shift; cmd_restore "$@" ;;
   backend)       shift; cmd_backend "$@" ;;
+  schedule)      shift; cmd_schedule "${1:-}" ;;
   peek)          shift; cmd_peek "${1:-}" ;;
   uninstall)     cmd_uninstall ;;
   export-config) shift; cmd_export_config "${1:-}" ;;
