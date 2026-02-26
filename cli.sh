@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="3.1.0"
+VERSION="3.2.0"
 BACKUP_DIR="$HOME/.claude-backup"
 SOURCE_DIR="$HOME/.claude/projects"
 CLAUDE_DIR="$HOME/.claude"
@@ -83,6 +83,9 @@ ${BOLD}Usage:${NC}
   claude-backup restore --project NAME      Filter by project name
   claude-backup restore <uuid>              Restore a session
   claude-backup restore <uuid> --force      Overwrite existing session
+  claude-backup restore --all               Restore all sessions at once
+  claude-backup backend set <mode>          Switch backup backend (github|git|local)
+  claude-backup schedule <freq>             Set backup frequency (off|daily|6h|hourly)
   claude-backup uninstall      Remove scheduler and optionally data
   claude-backup --help         Show this help
   claude-backup --version      Show version

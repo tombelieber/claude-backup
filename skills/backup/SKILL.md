@@ -30,13 +30,18 @@ Always pass `--json` to get structured output. Never parse human-readable output
 | Restore (overwrite) | `claude-backup restore UUID --force --json` |
 | Export config tarball | `claude-backup export-config --json` |
 | Import config tarball | `claude-backup import-config FILE --json` |
+| Switch backend mode | `claude-backup backend set <github\|git\|local> --json` |
+| Switch to custom remote | `claude-backup backend set git --remote URL --json` |
+| Set backup schedule | `claude-backup schedule <off\|daily\|6h\|hourly> --json` |
+| Restore all sessions | `claude-backup restore --all --json` |
+| Restore from machine | `claude-backup restore --all --machine SLUG --json` |
 | Uninstall scheduler | `claude-backup uninstall` |
 
 ## Reading responses
 
 - Success: `{"ok": true, …}` with exit code 0
 - Error: `{"error": "message"}` on stderr with exit code 1
-- `status` response includes `"mode": "github"` or `"mode": "local"`
+- `status` response includes `"mode": "github"`, `"mode": "git"`, or `"mode": "local"`, plus `"machine"` and `"machineSlug"` fields
 - Summarize results conversationally for the user. Don't dump raw JSON.
 - Pass `--local` during `init` to force local-only mode (no GitHub required)
 

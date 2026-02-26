@@ -1,7 +1,7 @@
 {
   "name": "claude-backup",
   "description": "Back up and restore your Claude Code environment",
-  "version": "3.1.0",
+  "version": "3.2.0",
   "author": { "name": "tombelieber" },
   "repository": "https://github.com/tombelieber/claude-backup"
 }
