@@ -402,7 +402,7 @@ cmd_sync() {
     mkdir "$lock_dir"
   fi
   echo $$ > "$lock_dir/pid"
-  trap 'rm -rf "$lock_dir"' EXIT
+  trap 'rm -rf "$BACKUP_DIR/.sync.lock"' EXIT
 
   if [ ! -d "$BACKUP_DIR/.git" ]; then
     fail "Not initialized. Run: claude-backup init"
