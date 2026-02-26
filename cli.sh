@@ -407,10 +407,6 @@ cmd_sync() {
   if [ ! -d "$BACKUP_DIR/.git" ]; then
     fail "Not initialized. Run: claude-backup init"
   fi
-  if [ ! -d "$SOURCE_DIR" ]; then
-    fail "Claude sessions directory not found: $SOURCE_DIR"
-  fi
-
   local config_count=0
 
   # Tier 1: Config backup
@@ -421,6 +417,9 @@ cmd_sync() {
   fi
 
   if [ "$sync_sessions_tier" = true ]; then
+    if [ ! -d "$SOURCE_DIR" ]; then
+      fail "Claude sessions directory not found: $SOURCE_DIR"
+    fi
     log "Starting backup..."
     printf "\n${BOLD}Syncing Claude sessions...${NC}\n\n"
 
