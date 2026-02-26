@@ -4,11 +4,11 @@
 
 **Goal:** Replace UUID-only restore with a rich session index — enabling `--list`, `--last N`, `--date`, `--project`, and `--force` restore modes.
 
-**Architecture:** Two new helper functions (`build_session_index`, `query_session_index`) added to `cli.sh`. `build_session_index` scans `~/.claude-backup/projects/` on every sync and writes `~/.claude-backup/session-index.json`. `query_session_index` uses `python3` (always available on macOS) to filter and return pipe-delimited rows. `cmd_restore` is fully rewritten to consume these. All other commands unchanged.
+**Architecture:** Two new helper functions (`build_session_index`, `query_session_index`) added to `cli.sh`. `build_session_index` scans `~/.claude-backup/projects/` on session sync (skipped for `--config-only`) and writes `~/.claude-backup/session-index.json` (gitignored — rebuilt every sync). `query_session_index` uses `python3` (always available on macOS) to filter and return pipe-delimited rows. `cmd_restore` is fully rewritten to consume these. All other commands unchanged.
 
 **v4/Team extensibility hooks:** `session-index.json` is a separate file from `manifest.json` (so v4 can encrypt sessions while keeping manifest readable). The index has a `version` field for future format changes. `build_session_index` only handles `*.jsonl.gz` — a `# v4: also scan *.jsonl.age.gz` comment marks the extension point. `query_session_index` is a standalone function, easily swappable.
 
-**Tech Stack:** Bash, python3 (macOS built-in), stat, find, gzip
+**Tech Stack:** Bash, python3 (macOS built-in), date, find, gzip
 
 ---
 
@@ -53,15 +53,24 @@ build_session_index() {
     project_hash=$(basename "$(dirname "$gz_file")")
     uuid="${filename%.jsonl.gz}"
     size_bytes=$(stat -f %z "$gz_file" 2>/dev/null || echo 0)
-    mod_time=$(stat -f "%Sm" -t "%Y-%m-%dT%H:%M:%SZ" "$gz_file" 2>/dev/null || echo "unknown")
+    mod_time=$(date -u -r "$gz_file" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo "unknown")
 
     [ $count -gt 0 ] && entries="${entries},"
     entries="${entries}
     {\"uuid\":\"${uuid}\",\"projectHash\":\"${project_hash}\",\"sizeBytes\":${size_bytes},\"backedUpAt\":\"${mod_time}\"}"
-    ((count++)) || true
+    ((count++)) || true  # || true: (( )) exits 1 when result is 0; guards against set -e
   done < <(find "$DEST_DIR" -name "*.jsonl.gz" -type f -print0 2>/dev/null)
 
-  cat > "$index_file" <<INDEX
+  if [ $count -eq 0 ]; then
+    cat > "$index_file" <<INDEX
+{
+  "version": "$VERSION",
+  "generatedAt": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')",
+  "sessions": []
+}
+INDEX
+  else
+    cat > "$index_file" <<INDEX
 {
   "version": "$VERSION",
   "generatedAt": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')",
@@ -69,6 +78,7 @@ build_session_index() {
   ]
 }
 INDEX
+  fi
 }
 
 # stdout contract: prints pipe-delimited rows (uuid|projectHash|sizeBytes|backedUpAt) — sorted newest first.
@@ -82,7 +92,7 @@ query_session_index() {
   local arg="${2:-}"
   local index_file="$BACKUP_DIR/session-index.json"
 
-  [ -f "$index_file" ] || { warn "No session index. Run: claude-backup sync"; return 1; }
+  [ -f "$index_file" ] || { warn "No session index. Run: claude-backup sync" >&2; return 1; }
 
   python3 - "$mode" "$arg" "$index_file" <<'PYEOF'
 import json, sys
@@ -140,9 +150,48 @@ Find the exact line:
 
 Replace with:
 ```bash
-  # Write manifest and session index
+  # Write manifest (always) and session index (only when sessions were synced)
   write_manifest
-  build_session_index
+  if [ "$sync_sessions_tier" = true ]; then build_session_index; fi
+```
+
+**Step 1b: Add `session-index.json` to the data-repo `.gitignore`**
+
+In `cmd_init`, find the `.gitignore` heredoc and add `session-index.json` to prevent `generatedAt` timestamp churn from causing empty commits on every sync:
+
+Find:
+```bash
+cli.sh
+GITIGNORE
+```
+
+Replace with:
+```bash
+cli.sh
+session-index.json
+GITIGNORE
+```
+
+Note: `session-index.json` is always rebuilt from `*.jsonl.gz` files on sync. It does not need to be committed — its `generatedAt` field changes every run, which would defeat the "No changes — already up to date" optimization in `cmd_sync`.
+
+**Step 1c: Add migration for existing installations**
+
+Existing users who already ran `cmd_init` won't get the updated `.gitignore`. In `cmd_sync`, after the lock is acquired and before `write_manifest`, add a one-time migration that appends the entry if missing.
+
+Find (in `cmd_sync`):
+```bash
+  if [ ! -d "$BACKUP_DIR/.git" ]; then
+    fail "Not initialized. Run: claude-backup init"
+  fi
+```
+
+Insert after it:
+```bash
+  # v3 migration: ensure session-index.json is gitignored (existing installs)
+  local gi="$BACKUP_DIR/.gitignore"
+  if [ -f "$gi" ] && ! grep -qF 'session-index.json' "$gi"; then
+    echo 'session-index.json' >> "$gi"
+  fi
 ```
 
 **Step 2: Verify syntax**
@@ -193,9 +242,14 @@ cmd_restore() {
     case "${args[$i]}" in
       --list)    mode="list" ;;
       --force)   force=true ;;
-      --last)    mode="last";    ((i++)) || true; last_n="${args[$i]:-10}" ;;
-      --date)    mode="date";    ((i++)) || true; filter_date="${args[$i]:-}" ;;
-      --project) mode="project"; ((i++)) || true; filter_project="${args[$i]:-}" ;;
+      --last)    mode="last";    ((i++)) || true; last_n="${args[$i]:-10}"
+                 [[ "$last_n" == --* ]] && { warn "Missing number after --last"; return 1; } ;;
+      --date)    mode="date";    ((i++)) || true; filter_date="${args[$i]:-}"
+                 [ -z "$filter_date" ] && { warn "Missing value for --date (expected YYYY-MM-DD)"; return 1; }
+                 [[ "$filter_date" == --* ]] && { warn "Missing value for --date (expected YYYY-MM-DD)"; return 1; } ;;
+      --project) mode="project"; ((i++)) || true; filter_project="${args[$i]:-}"
+                 [ -z "$filter_project" ] && { warn "Missing value for --project"; return 1; }
+                 [[ "$filter_project" == --* ]] && { warn "Missing value for --project"; return 1; } ;;
       *)         [ "$mode" = "uuid" ] && uuid="${args[$i]}" ;;
     esac
     ((i++)) || true
@@ -232,7 +286,7 @@ cmd_restore() {
       display_size=$(( s_size / 1024 ))
       display_date="${s_date%T*}"  # strip time, show date only
       printf "  %-38s %-36s %5sK  %s\n" "$display_hash" "$s_uuid" "$display_size" "$display_date"
-      ((shown++)) || true
+      ((shown++)) || true  # || true: guards against set -e (see build_session_index)
     done < <(query_session_index "$query_mode" "$query_arg")
 
     if [ $shown -eq 0 ]; then
@@ -363,7 +417,7 @@ Insert before it:
   local index_file="$BACKUP_DIR/session-index.json"
   if [ -f "$index_file" ]; then
     local index_count
-    index_count=$(python3 -c "import json; d=json.load(open('$index_file')); print(len(d.get('sessions',[])))" 2>/dev/null || echo "?")
+    index_count=$(python3 -c "import json,sys; print(len(json.load(open(sys.argv[1])).get('sessions',[])))" "$index_file" 2>/dev/null || echo "?")
     printf "  ${BOLD}Index:${NC}       $index_count sessions indexed\n"
   fi
 
@@ -420,7 +474,7 @@ VERSION="3.0.0"
 
 **Step 2: Bump in package.json**
 
-Change `"version": "2.0.0"` to `"version": "3.0.0"`.
+Change `"version": "2.0.1"` to `"version": "3.0.0"`.
 
 **Step 3: Verify syntax**
 
@@ -492,12 +546,23 @@ Expected: At most 3 rows shown (newest first).
 Run: `./cli.sh restore --project claude-backup`
 Expected: Only sessions from the claude-backup project shown (or empty if no sessions from this project).
 
-**Step 6: Verify `--date` filter**
+**Step 6: Verify argument validation**
+
+Run: `./cli.sh restore --last --force`
+Expected: Error message `"Missing number after --last"`, NOT a Python traceback.
+
+Run: `./cli.sh restore --date`
+Expected: Error message `"Missing value for --date (expected YYYY-MM-DD)"`.
+
+Run: `./cli.sh restore --project`
+Expected: Error message `"Missing value for --project"`.
+
+**Step 7: Verify `--date` filter**
 
 Run: `./cli.sh restore --date $(date -u '+%Y-%m-%d')`
 Expected: Sessions backed up today (UTC) shown. May be empty if sync happened yesterday UTC.
 
-**Step 7: Verify UUID restore still works**
+**Step 8: Verify UUID restore still works**
 
 Pick a UUID from `--list` output. Run:
 ```bash
@@ -505,7 +570,7 @@ Pick a UUID from `--list` output. Run:
 ```
 Expected: Either restores successfully OR warns "File already exists. Use --force to overwrite."
 
-**Step 8: Verify `--force` flag**
+**Step 9: Verify `--force` flag**
 
 If previous step warned about existing file:
 ```bash
@@ -513,14 +578,21 @@ If previous step warned about existing file:
 ```
 Expected: Overwrites and confirms restore.
 
-**Step 9: Verify security exclusions still intact**
+**Step 10: Verify `session-index.json` is gitignored**
+
+```bash
+grep -F 'session-index.json' ~/.claude-backup/.gitignore
+```
+Expected: `session-index.json` appears in output. If not, the v3 migration in `cmd_sync` failed.
+
+**Step 11: Verify security exclusions still intact**
 
 ```bash
 find ~/.claude-backup/ -name ".credentials.json" -o -name ".encryption_key" | wc -l
 ```
 Expected: 0
 
-**Step 10: Verify version**
+**Step 12: Verify version**
 
 Run: `./cli.sh --version`
 Expected: `claude-backup v3.0.0`
@@ -528,6 +600,8 @@ Expected: `claude-backup v3.0.0`
 ---
 
 ## Changelog of Fixes Applied (Audit → Final Plan)
+
+### Round 1 (Initial Plan Review)
 
 | # | Issue | Severity | Fix Applied |
 |---|-------|----------|-------------|
@@ -537,3 +611,27 @@ Expected: `claude-backup v3.0.0`
 | 4 | `--date` uses UTC — potential user confusion | Warning | Documented in `show_help` and README |
 | 5 | `python3` inline script receives `index_file` as arg, not shell expansion | Security | `path = sys.argv[3]` — no shell injection risk |
 | 6 | `shown` counter in while loop subshell | Correctness | `while ... done < <(...)` runs in main shell in bash — `shown` increments correctly |
+
+### Round 2 (Full Audit: auditing-plans + prove-it)
+
+| # | Issue | Severity | Fix Applied |
+|---|-------|----------|-------------|
+| 7 | `warn` in `query_session_index` goes to stdout — gets swallowed by `<(...)` process substitution, garbles table output | Blocker | Added `>&2` to redirect `warn` to stderr: `warn "..." >&2` |
+| 8 | `--last --force` passes `"--force"` as value to `python3 int()`, causing ValueError | Blocker | Added `[[ "$last_n" == --* ]]` guard after consuming the argument. Same for `--date` and `--project` |
+| 9 | `generatedAt` timestamp changes every run, defeating `git diff --cached --quiet` "no changes" optimization — every sync commits even with no data changes | Blocker | Added `session-index.json` to data-repo `.gitignore` in `cmd_init`. Index is always rebuilt from `*.jsonl.gz` on sync |
+| 10 | `build_session_index` called unconditionally — overwrites valid index on `--config-only` sync | Bug | Guarded with `[ "$sync_sessions_tier" = true ] && build_session_index` |
+| 11 | `stat -f "%Sm"` uses local time but format string ends with literal `Z` (implies UTC) | Warning | Replaced with `date -u -r "$gz_file" '+%Y-%m-%dT%H:%M:%SZ'` — correct UTC via BSD `date -u` |
+| 12 | `cmd_status` python3 uses inline `$index_file` expansion — path injection risk if `$HOME` contains single quotes | Warning | Changed to `python3 -c "...sys.argv[1]..." "$index_file"` — consistent with `query_session_index` |
+| 13 | Empty `--date` or `--project` arguments silently match everything (python `"".startswith("")` is True) | Warning | Added `[ -z "$filter_date" ]` guard — now errors with "Missing value for --date" |
+
+### Round 3 (100/100 pass)
+
+| # | Issue | Severity | Fix Applied |
+|---|-------|----------|-------------|
+| 14 | `[ ... ] && build_session_index` under `set -e` exits script when condition is false (exit code 1 from `[` propagates) | Blocker | Replaced with `if [ ... ]; then build_session_index; fi` — `if` is exempt from `set -e` |
+| 15 | package.json version anchor stale: plan says `"version": "2.0.0"` but file is now `"version": "2.0.1"` | Blocker | Updated anchor to `"version": "2.0.1"` |
+| 16 | Existing installations don't get `session-index.json` in `.gitignore` — only `cmd_init` writes it | Bug | Added v3 migration in `cmd_sync`: appends entry to `.gitignore` if missing |
+| 17 | JSON empty array cosmetic: `"sessions": [\n  ]` has blank line | Minor | Added `count=0` branch that outputs `"sessions": []` directly |
+| 18 | `((count++)) \|\| true` pattern unexplained — fragile to future edits | Minor | Added inline comment: `# \|\| true: (( )) exits 1 when result is 0; guards against set -e` |
+| 19 | Tech Stack still listed `stat` (replaced with `date -u -r`) | Minor | Updated to `date` |
+| 20 | Architecture description said "on every sync" — now conditional | Minor | Updated to "on session sync (skipped for `--config-only`)" |
