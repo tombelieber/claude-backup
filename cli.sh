@@ -447,7 +447,8 @@ migrate_to_namespaced() {
     mv "$BACKUP_DIR/projects" "$BACKUP_DIR/machines/$slug/projects"
 
     # 3. Persist slug immediately so get_machine_slug() can read it on next sync.
-    python3 -c "
+    if [ -f "$BACKUP_DIR/manifest.json" ]; then
+      python3 -c "
 import json, sys
 path = sys.argv[1]
 slug = sys.argv[2]
@@ -455,14 +456,13 @@ m = json.load(open(path))
 m['machineSlug'] = slug
 json.dump(m, open(path, 'w'), indent=2)
 " "$BACKUP_DIR/manifest.json" "$slug"
+    fi
 
     # 4. Update DEST_DIR for the rest of this sync
     DEST_DIR="$BACKUP_DIR/machines/$slug/projects"
 
     # 5. Commit the migration
-    cd "$BACKUP_DIR"
-    git add -A
-    git commit -q -m "migrate: namespace projects under machines/$slug"
+    (cd "$BACKUP_DIR" && git add machines/ manifest.json && git commit -q -m "migrate: namespace projects under machines/$slug")
 
     log "Migrated to machine-namespaced layout: machines/$slug/"
     info "Migrated backup layout to machine-namespaced directories"
@@ -490,8 +490,10 @@ write_manifest() {
     session_uncompressed=$(dir_bytes "$SOURCE_DIR")
   fi
 
+  # Resolve mode: BACKUP_MODE env (set during init) > existing manifest > "github" default
   local mode="${BACKUP_MODE:-$(read_backup_mode)}"
 
+  # Extract username from git remote URL (no network call — works offline)
   local cached_user="local"
   if [ "$mode" != "local" ]; then
     cached_user=$(cd "$BACKUP_DIR" && git remote get-url origin 2>/dev/null \
