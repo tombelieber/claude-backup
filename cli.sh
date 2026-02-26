@@ -376,6 +376,86 @@ write_manifest() {
 MANIFEST
 }
 
+build_session_index() {
+  # Scans ~/.claude-backup/projects/ and writes session-index.json.
+  # One entry per *.jsonl.gz file. Sorted newest-first by backedUpAt.
+  # v4: also scan *.jsonl.age.gz when encryption is added.
+  local index_file="$BACKUP_DIR/session-index.json"
+  local entries=""
+  local count=0
+
+  while IFS= read -r -d '' gz_file; do
+    local filename project_hash uuid size_bytes mod_time
+    filename=$(basename "$gz_file")
+    project_hash=$(basename "$(dirname "$gz_file")")
+    uuid="${filename%.jsonl.gz}"
+    size_bytes=$(stat -f %z "$gz_file" 2>/dev/null || echo 0)
+    mod_time=$(date -u -r "$gz_file" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo "unknown")
+
+    [ $count -gt 0 ] && entries="${entries},"
+    entries="${entries}
+    {\"uuid\":\"${uuid}\",\"projectHash\":\"${project_hash}\",\"sizeBytes\":${size_bytes},\"backedUpAt\":\"${mod_time}\"}"
+    ((count++)) || true  # || true: (( )) exits 1 when result is 0; guards against set -e
+  done < <(find "$DEST_DIR" -name "*.jsonl.gz" -type f -print0 2>/dev/null)
+
+  if [ $count -eq 0 ]; then
+    cat > "$index_file" <<INDEX
+{
+  "version": "$VERSION",
+  "generatedAt": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')",
+  "sessions": []
+}
+INDEX
+  else
+    cat > "$index_file" <<INDEX
+{
+  "version": "$VERSION",
+  "generatedAt": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')",
+  "sessions": [${entries}
+  ]
+}
+INDEX
+  fi
+}
+
+# stdout contract: prints pipe-delimited rows (uuid|projectHash|sizeBytes|backedUpAt) — sorted newest first.
+# Args: <mode> <arg>
+#   mode=all     arg=ignored      → all sessions
+#   mode=last    arg=N            → last N sessions
+#   mode=date    arg=YYYY-MM-DD   → sessions where backedUpAt starts with arg (UTC)
+#   mode=project arg=partial      → sessions where projectHash contains arg (case-insensitive)
+query_session_index() {
+  local mode="${1:-all}"
+  local arg="${2:-}"
+  local index_file="$BACKUP_DIR/session-index.json"
+
+  [ -f "$index_file" ] || { warn "No session index. Run: claude-backup sync" >&2; return 1; }
+
+  python3 - "$mode" "$arg" "$index_file" <<'PYEOF'
+import json, sys
+
+mode = sys.argv[1]
+arg  = sys.argv[2]
+path = sys.argv[3]
+
+with open(path) as f:
+    data = json.load(f)
+
+sessions = data.get("sessions", [])
+sessions.sort(key=lambda s: s.get("backedUpAt", ""), reverse=True)
+
+if mode == "last":
+    sessions = sessions[:int(arg) if arg else 10]
+elif mode == "date":
+    sessions = [s for s in sessions if s.get("backedUpAt", "").startswith(arg)]
+elif mode == "project":
+    sessions = [s for s in sessions if arg.lower() in s.get("projectHash", "").lower()]
+
+for s in sessions:
+    print(f"{s['uuid']}|{s['projectHash']}|{s['sizeBytes']}|{s['backedUpAt']}")
+PYEOF
+}
+
 cmd_sync() {
   local sync_config_tier=true
   local sync_sessions_tier=true
