@@ -685,12 +685,85 @@ cmd_status() {
   printf "\n"
 }
 cmd_restore() {
-  local uuid="${1:-}"
+  local mode="uuid"
+  local uuid=""
+  local last_n=10
+  local filter_date=""
+  local filter_project=""
+  local force=false
 
+  # Parse args — supports both "--last 10" (two args) and UUID with optional --force
+  local args=("$@")
+  local i=0
+  while [ $i -lt ${#args[@]} ]; do
+    case "${args[$i]}" in
+      --list)    mode="list" ;;
+      --force)   force=true ;;
+      --last)    mode="last";    ((i++)) || true; last_n="${args[$i]:-10}"
+                 [[ "$last_n" == --* ]] && { warn "Missing number after --last"; return 1; } ;;
+      --date)    mode="date";    ((i++)) || true; filter_date="${args[$i]:-}"
+                 [ -z "$filter_date" ] && { warn "Missing value for --date (expected YYYY-MM-DD)"; return 1; }
+                 [[ "$filter_date" == --* ]] && { warn "Missing value for --date (expected YYYY-MM-DD)"; return 1; } ;;
+      --project) mode="project"; ((i++)) || true; filter_project="${args[$i]:-}"
+                 [ -z "$filter_project" ] && { warn "Missing value for --project"; return 1; }
+                 [[ "$filter_project" == --* ]] && { warn "Missing value for --project"; return 1; } ;;
+      *)         [ "$mode" = "uuid" ] && uuid="${args[$i]}" ;;
+    esac
+    ((i++)) || true
+  done
+
+  if [ ! -d "$DEST_DIR" ]; then
+    fail "No backups found. Run: claude-backup sync"
+  fi
+
+  # ── Listing modes ────────────────────────────────────────────────────────────
+  if [ "$mode" != "uuid" ]; then
+    printf "\n${BOLD}Claude Code Sessions${NC}\n\n"
+    printf "  %-38s %-36s %6s  %s\n" "PROJECT" "UUID" "SIZE" "DATE (UTC)"
+    printf "  %-38s %-36s %6s  %s\n" "--------------------------------------" \
+      "------------------------------------" "------" "----------"
+
+    local query_mode query_arg
+    case "$mode" in
+      list)    query_mode="all";     query_arg="" ;;
+      last)    query_mode="last";    query_arg="$last_n" ;;
+      date)    query_mode="date";    query_arg="$filter_date" ;;
+      project) query_mode="project"; query_arg="$filter_project" ;;
+    esac
+
+    local shown=0
+    while IFS='|' read -r s_uuid s_hash s_size s_date; do
+      local display_hash display_size display_date
+      # Show last 38 chars of project hash (most specific part)
+      if [ ${#s_hash} -gt 38 ]; then
+        display_hash="...${s_hash: -35}"
+      else
+        display_hash="$s_hash"
+      fi
+      display_size=$(( s_size / 1024 ))
+      display_date="${s_date%T*}"  # strip time, show date only
+      printf "  %-38s %-36s %5sK  %s\n" "$display_hash" "$s_uuid" "$display_size" "$display_date"
+      ((shown++)) || true  # || true: guards against set -e (see build_session_index)
+    done < <(query_session_index "$query_mode" "$query_arg")
+
+    if [ $shown -eq 0 ]; then
+      printf "  ${DIM}No sessions found matching your filter.${NC}\n"
+    fi
+
+    printf "\n  ${DIM}Restore: claude-backup restore <uuid>${NC}\n"
+    printf "  ${DIM}Force:   claude-backup restore <uuid> --force${NC}\n\n"
+    return 0
+  fi
+
+  # ── UUID restore mode ─────────────────────────────────────────────────────────
   if [ -z "$uuid" ]; then
-    printf "\n${BOLD}Usage:${NC} claude-backup restore <session-uuid>\n\n"
-    printf "  Find session UUIDs with:\n"
-    printf "    ls ~/.claude-backup/projects/*/\n\n"
+    printf "\n${BOLD}Usage:${NC}\n"
+    printf "  claude-backup restore <uuid>                  Restore by UUID\n"
+    printf "  claude-backup restore <uuid> --force          Overwrite existing\n"
+    printf "  claude-backup restore --list                  List all sessions\n"
+    printf "  claude-backup restore --last N                List last N sessions\n"
+    printf "  claude-backup restore --date YYYY-MM-DD       Sessions from date (UTC)\n"
+    printf "  claude-backup restore --project PARTIAL       Filter by project name\n\n"
     return 1
   fi
 
@@ -698,11 +771,6 @@ cmd_restore() {
     fail "Invalid session identifier: $uuid"
   fi
 
-  if [ ! -d "$DEST_DIR" ]; then
-    fail "No backups found. Run: claude-backup init"
-  fi
-
-  # Find matching .gz files
   local matches
   matches=$(find "$DEST_DIR" -name "*${uuid}*.gz" -type f 2>/dev/null)
 
@@ -715,9 +783,7 @@ cmd_restore() {
 
   if [ "$match_count" -gt 1 ]; then
     printf "\n${YELLOW}Multiple matches found:${NC}\n"
-    echo "$matches" | while read -r f; do
-      printf "  %s\n" "$f"
-    done
+    echo "$matches" | while read -r f; do printf "  %s\n" "$f"; done
     printf "\nProvide a more specific UUID.\n\n"
     return 1
   fi
@@ -734,8 +800,8 @@ cmd_restore() {
   printf "  ${DIM}From:${NC} $gz_file\n"
   printf "  ${DIM}To:${NC}   $target_file\n\n"
 
-  if [ -f "$target_file" ]; then
-    warn "File already exists at destination (will not overwrite)"
+  if [ -f "$target_file" ] && [ "$force" = false ]; then
+    warn "File already exists. Use --force to overwrite."
     return 1
   fi
 
@@ -946,7 +1012,7 @@ case "${1:-}" in
   init|"")       cmd_init ;;
   sync)          shift; cmd_sync "$@" ;;
   status)        cmd_status ;;
-  restore)       cmd_restore "${2:-}" ;;
+  restore)       shift; cmd_restore "$@" ;;
   uninstall)     cmd_uninstall ;;
   export-config) cmd_export_config "${2:-}" ;;
   import-config) shift; cmd_import_config "$@" ;;
