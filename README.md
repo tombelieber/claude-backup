@@ -1,6 +1,6 @@
 # Claude Backup
 
-Back up your entire Claude Code environment to a private GitHub repo.
+Back up your entire Claude Code environment — locally or to a private GitHub repo.
 
 ## Quick Start
 
@@ -21,8 +21,8 @@ Claude Backup provides two-tier protection for your Claude Code environment:
 
 - **macOS** (Linux coming soon)
 - **git**
-- **gh** ([GitHub CLI](https://cli.github.com), authenticated via `gh auth login`)
 - **gzip** (built-in on macOS)
+- **gh** ([GitHub CLI](https://cli.github.com)) — *optional*. Enables remote backup to GitHub. Without it, backups are local-only.
 
 ## Commands
 
@@ -36,6 +36,7 @@ Claude Backup provides two-tier protection for your Claude Code environment:
 | `claude-backup export-config` | Export config as portable tarball |
 | `claude-backup import-config <file>` | Import config from tarball |
 | `claude-backup import-config <file> --force` | Import config, overwriting existing files |
+| `claude-backup peek <uuid>` | Preview a session's contents |
 | `claude-backup restore --list` | List all backed-up sessions |
 | `claude-backup restore --last N` | List last N sessions |
 | `claude-backup restore --date YYYY-MM-DD` | Filter by UTC date |
@@ -43,6 +44,8 @@ Claude Backup provides two-tier protection for your Claude Code environment:
 | `claude-backup restore <uuid>` | Restore a specific session |
 | `claude-backup restore <uuid> --force` | Overwrite existing session |
 | `claude-backup uninstall` | Remove scheduler and optionally delete data |
+| `claude-backup <any> --json` | Structured JSON output (for scripts/agents) |
+| `claude-backup init --local` | Force local-only mode (no GitHub) |
 
 ## Machine Migration
 
@@ -86,6 +89,31 @@ claude-backup restore <uuid> --force
 ```
 
 The session index (`session-index.json`) is auto-generated on every sync. It is gitignored and rebuilt from the `*.jsonl.gz` files each time — you never need to manage it manually. Dates in the index and `--date` filter use UTC.
+
+## Local-Only Mode
+
+Backup without GitHub — no account, no remote, no network needed.
+
+```bash
+# Automatic: if gh is not installed, local mode is used
+npx claude-backup
+
+# Explicit: force local mode even if gh is available
+npx claude-backup --local
+```
+
+In local mode, backups are committed to a local git repo at `~/.claude-backup/` but never pushed. Everything else works identically — sync, restore, peek, export/import.
+
+## Claude Code Plugin
+
+Install the plugin to let Claude operate backups on your behalf:
+
+```bash
+/plugin marketplace add tombelieber/claude-backup
+/plugin install claude-backup
+```
+
+The plugin provides a skill that teaches Claude the CLI commands. The agent always uses `--json` for structured output.
 
 ## What's Backed Up
 
@@ -167,7 +195,6 @@ gh repo delete claude-backup-data
 ## Future Plans
 
 - Linux support (systemd timer)
-- Cloud backup backends
 - Session encryption (age)
 
 ## Related
