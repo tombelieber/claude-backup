@@ -1001,6 +1001,169 @@ cmd_restore() {
     printf "\n"
   fi
 }
+cmd_peek() {
+  local uuid="${1:-}"
+
+  if [ -z "$uuid" ]; then
+    if [ "$JSON_OUTPUT" = true ]; then
+      json_err '{"error":"Usage: claude-backup peek <uuid>"}'
+    else
+      printf "\n${BOLD}Usage:${NC} claude-backup peek <uuid>\n\n"
+      printf "  Preview the contents of a backed-up session.\n\n"
+    fi
+    return 1
+  fi
+
+  if [[ ! "$uuid" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+    fail "Invalid session identifier: $uuid"
+  fi
+
+  local matches
+  matches=$(find "$DEST_DIR" -name "*${uuid}*.gz" -type f 2>/dev/null)
+
+  if [ -z "$matches" ]; then
+    fail "No backup found matching: $uuid"
+  fi
+
+  local match_count
+  match_count=$(echo "$matches" | wc -l | tr -d ' ')
+
+  if [ "$match_count" -gt 1 ]; then
+    fail "Multiple matches. Provide a more specific UUID."
+  fi
+
+  local gz_file="$matches"
+  local filename project_hash
+  filename=$(basename "$gz_file")
+  project_hash=$(basename "$(dirname "$gz_file")")
+  local file_uuid="${filename%.jsonl.gz}"
+  local size_bytes
+  size_bytes=$(stat -f %z "$gz_file" 2>/dev/null || echo 0)
+  local backed_up_at
+  backed_up_at=$(date -u -r "$gz_file" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo "unknown")
+
+  # Parse JSONL with python3
+  local peek_json
+  peek_json=$(python3 - "$gz_file" <<'PYEOF'
+import json, sys, gzip
+from collections import OrderedDict
+
+gz_path = sys.argv[1]
+with gzip.open(gz_path, 'rt', encoding='utf-8') as f:
+    lines = f.readlines()
+
+records = []
+for line in lines:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        entry = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    if entry.get("type") not in ("user", "assistant"):
+        continue
+    records.append(entry)
+
+# Merge assistant streaming chunks (each chunk is a different content block)
+groups = OrderedDict()
+for r in records:
+    msg = r.get("message", {})
+    key = msg.get("id") or r.get("uuid", id(r))
+    groups.setdefault(key, []).append(r)
+
+deduped = []
+for entries in groups.values():
+    merged = entries[0].copy()
+    merged["message"] = dict(entries[0].get("message", {}))
+    all_content = []
+    for e in entries:
+        content = e.get("message", {}).get("content", [])
+        if isinstance(content, list):
+            all_content.extend(content)
+        elif isinstance(content, str) and content:
+            all_content.append({"type": "text", "text": content})
+    merged["message"]["content"] = all_content
+    deduped.append(merged)
+
+def extract_text(entry):
+    msg = entry.get("message", {})
+    role = msg.get("role", "unknown")
+    content = msg.get("content", "")
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list):
+        text = next((b.get("text", "") for b in content
+                      if isinstance(b, dict) and b.get("type") == "text"), "")
+    else:
+        text = ""
+    return role, text[:80].replace("\n", " ").replace('"', '\\"')
+
+count = len(deduped)
+first = [extract_text(r) for r in deduped[:2]]
+last  = [extract_text(r) for r in deduped[-2:]] if count > 2 else []
+
+# Compute uncompressed size
+import os
+uncompressed = sum(len(line) for line in lines)
+
+result = {
+    "messageCount": count,
+    "uncompressedBytes": uncompressed,
+    "firstMessages": [{"role": r, "preview": t} for r, t in first],
+    "lastMessages": [{"role": r, "preview": t} for r, t in last],
+}
+print(json.dumps(result))
+PYEOF
+  )
+
+  if [ $? -ne 0 ] || [ -z "$peek_json" ]; then
+    fail "Failed to parse session file"
+  fi
+
+  if [ "$JSON_OUTPUT" = true ]; then
+    # Merge file metadata with parsed message data
+    python3 -c "
+import json, sys
+meta = {'uuid': sys.argv[1], 'projectHash': sys.argv[2], 'backedUpAt': sys.argv[3], 'sizeBytes': int(sys.argv[4])}
+parsed = json.loads(sys.argv[5])
+meta.update(parsed)
+print(json.dumps(meta))
+" "$file_uuid" "$project_hash" "$backed_up_at" "$size_bytes" "$peek_json"
+  else
+    # Human-readable output
+    local msg_count uncompressed_bytes
+    msg_count=$(echo "$peek_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['messageCount'])")
+    uncompressed_bytes=$(echo "$peek_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['uncompressedBytes'])")
+    local uncompressed_k=$(( uncompressed_bytes / 1024 ))
+    local size_k=$(( size_bytes / 1024 ))
+
+    printf "\n${BOLD}Session:${NC} $file_uuid\n"
+    printf "${BOLD}Project:${NC} $project_hash\n"
+    printf "${BOLD}Date:${NC}    $backed_up_at\n"
+    printf "${BOLD}Size:${NC}    ${size_k}K (compressed) → ${uncompressed_k}K (uncompressed)\n"
+
+    printf "\n${DIM}── First messages ──────────────────────────────────────${NC}\n"
+    echo "$peek_json" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+for m in data['firstMessages']:
+    print(f\"  [{m['role']}]  {m['preview']}\")
+"
+
+    if [ "$msg_count" -gt 2 ]; then
+      printf "\n${DIM}── Last messages ───────────────────────────────────────${NC}\n"
+      echo "$peek_json" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+for m in data['lastMessages']:
+    print(f\"  [{m['role']}]  {m['preview']}\")
+"
+    fi
+
+    printf "\n${BOLD}Messages:${NC} $msg_count total\n\n"
+  fi
+}
 cmd_uninstall() {
   printf "\n${BOLD}Uninstalling Claude Backup${NC}\n\n"
 
