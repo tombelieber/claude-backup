@@ -1,7 +1,7 @@
 {
   "name": "claude-backup",
-  "version": "1.0.0",
-  "description": "Back up your Claude Code chat sessions to GitHub",
+  "version": "2.0.0",
+  "description": "Back up your Claude Code environment to GitHub",
   "bin": {
     "claude-backup": "cli.sh"
   },
