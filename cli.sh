@@ -47,7 +47,9 @@ info() { if [ "$JSON_OUTPUT" != true ]; then printf "  ${GREEN}✓${NC} %s\n" "$
 warn() { if [ "$JSON_OUTPUT" != true ]; then printf "  ${YELLOW}!${NC} %s\n" "$*"; fi; }
 fail() {
   if [ "$JSON_OUTPUT" = true ]; then
-    printf '{"error":"%s"}\n' "$*" >&2
+    local escaped
+    escaped=$(printf '%s' "$*" | sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g')
+    printf '{"error":"%s"}\n' "$escaped" >&2
   else
     printf "  ${RED}✗${NC} %s\n" "$*"
   fi
