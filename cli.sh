@@ -752,6 +752,92 @@ cmd_export_config() {
   printf "  claude-backup import-config ${output_file}\n\n"
 }
 
+cmd_import_config() {
+  local input_file=""
+  local force=false
+
+  # Parse args
+  for arg in "$@"; do
+    case "$arg" in
+      --force) force=true ;;
+      *)       [ -z "$input_file" ] && input_file="$arg" ;;
+    esac
+  done
+
+  if [ -z "$input_file" ]; then
+    printf "\n${BOLD}Usage:${NC} claude-backup import-config <file.tar.gz> [--force]\n\n"
+    printf "  ${DIM}--force  Overwrite existing files${NC}\n\n"
+    return 1
+  fi
+
+  if [ ! -f "$input_file" ]; then
+    fail "File not found: $input_file"
+  fi
+
+  printf "\n${BOLD}Importing Claude Code config...${NC}\n"
+  if [ "$force" = true ]; then
+    printf "  ${YELLOW}Force mode: existing files will be overwritten${NC}\n"
+  fi
+  printf "\n"
+
+  # Create temp dir for inspection
+  local tmp_dir
+  tmp_dir=$(mktemp -d)
+  trap 'rm -rf "$tmp_dir"' RETURN
+
+  tar -xzf "$input_file" -C "$tmp_dir"
+
+  # Security check BEFORE copying anything: abort if archive contains sensitive files (including nested)
+  for pattern in "${SENSITIVE_PATTERNS[@]}"; do
+    local basename_pattern
+    basename_pattern=$(basename "$pattern")
+    if find "$tmp_dir" -name "$basename_pattern" -print -quit 2>/dev/null | grep -q .; then
+      fail "Archive contains sensitive file matching '$basename_pattern' — import aborted. Inspect with: tar -tzf $input_file"
+    fi
+  done
+
+  local imported=0
+
+  # Import each config item
+  for item in "${CONFIG_ITEMS[@]}"; do
+    local src="$tmp_dir/$item"
+    [ -e "$src" ] || continue
+
+    local dest="$CLAUDE_DIR/$item"
+
+    if [ -d "$src" ]; then
+      mkdir -p "$dest"
+      while IFS= read -r -d '' file; do
+        local rel="${file#$src/}"
+        local dest_file="$dest/$rel"
+        mkdir -p "$(dirname "$dest_file")"
+        if [ -f "$dest_file" ] && [ "$force" = false ]; then
+          warn "Skipped (exists): $item/$rel"
+        else
+          cp "$file" "$dest_file"
+          ((imported++)) || true
+        fi
+      done < <(find "$src" -type f -print0 2>/dev/null)
+      local count
+      count=$(find "$src" -type f 2>/dev/null | wc -l | tr -d ' ')
+      info "$item/ ($count files)"
+    else
+      if [ -f "$dest" ] && [ "$force" = false ]; then
+        warn "Skipped (exists): $item"
+      else
+        mkdir -p "$(dirname "$dest")"
+        cp "$src" "$dest"
+        ((imported++)) || true
+        info "$item"
+      fi
+    fi
+  done
+
+  printf "\n${GREEN}${BOLD}Done!${NC} Imported $imported files.\n"
+  printf "${DIM}Restart Claude Code to apply settings.${NC}\n"
+  printf "${DIM}Note: Plugins will be downloaded on first launch.${NC}\n\n"
+}
+
 case "${1:-}" in
   init|"")       cmd_init ;;
   sync)          shift; cmd_sync "$@" ;;
@@ -759,6 +845,7 @@ case "${1:-}" in
   restore)       cmd_restore "${2:-}" ;;
   uninstall)     cmd_uninstall ;;
   export-config) cmd_export_config "${2:-}" ;;
+  import-config) shift; cmd_import_config "$@" ;;
   --help|-h)     show_help ;;
   --version|-v)  echo "claude-backup v$VERSION" ;;
   *)             echo "Unknown command: $1"; show_help; exit 1 ;;
