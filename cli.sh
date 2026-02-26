@@ -518,6 +518,9 @@ PYEOF
 cmd_sync() {
   local sync_config_tier=true
   local sync_sessions_tier=true
+  local json_config_count=0
+  local json_added=0 json_updated=0 json_removed=0
+  local json_pushed=false
 
   # Parse flags
   for arg in "$@"; do
@@ -557,8 +560,9 @@ cmd_sync() {
 
   # Tier 1: Config backup
   if [ "$sync_config_tier" = true ]; then
-    printf "\n${BOLD}Backing up config profile...${NC}\n"
+    if [ "$JSON_OUTPUT" != true ]; then printf "\n${BOLD}Backing up config profile...${NC}\n"; fi
     config_count=$(sync_config)
+    json_config_count=$config_count
     info "Config: $config_count files synced"
   fi
 
@@ -567,7 +571,7 @@ cmd_sync() {
       fail "Claude sessions directory not found: $SOURCE_DIR"
     fi
     log "Starting backup..."
-    printf "\n${BOLD}Syncing Claude sessions...${NC}\n\n"
+    if [ "$JSON_OUTPUT" != true ]; then printf "\n${BOLD}Syncing Claude sessions...${NC}\n\n"; fi
 
     local added=0 updated=0 removed=0
     local total_sessions=0 total_projects=0
@@ -576,7 +580,7 @@ cmd_sync() {
     total_projects=$(find "$SOURCE_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
     total_sessions=$(find "$SOURCE_DIR" -name "*.jsonl" 2>/dev/null | wc -l | tr -d ' ')
     step "Found $total_sessions sessions across $total_projects projects"
-    printf "\n"
+    if [ "$JSON_OUTPUT" != true ]; then printf "\n"; fi
 
     # Sync each project directory
     while IFS= read -r -d '' project_dir; do
@@ -637,6 +641,9 @@ cmd_sync() {
       fi
     fi
 
+    json_added=$added
+    json_updated=$updated
+    json_removed=$removed
     info "Compressed: $added, copied: $updated, removed: $removed"
     log "Processed: $added compressed, $updated copied, $removed removed"
   fi
@@ -659,7 +666,16 @@ cmd_sync() {
   git add -A
 
   if git diff --cached --quiet; then
-    info "No changes — already up to date"
+    if [ "$JSON_OUTPUT" = true ]; then
+      local sessions_json="null"
+      if [ "$sync_sessions_tier" = true ]; then
+        sessions_json=$(printf '{"added":%s,"updated":%s,"removed":%s}' "$json_added" "$json_updated" "$json_removed")
+      fi
+      printf '{"ok":true,"config":{"filesSynced":%s},"sessions":%s,"pushed":false}\n' \
+        "$json_config_count" "$sessions_json"
+    else
+      info "No changes — already up to date"
+    fi
     return 0
   fi
 
@@ -669,24 +685,34 @@ cmd_sync() {
 
   step "Committing $file_count files ($total_size total)..."
   git commit -q -m "backup $(date '+%Y-%m-%d %H:%M') — ${file_count} files, ${total_size} total"
-  printf "${GREEN}✓${NC}\n"
+  if [ "$JSON_OUTPUT" != true ]; then printf "${GREEN}✓${NC}\n"; fi
 
   local mode="${BACKUP_MODE:-$(read_backup_mode)}"
   if [ "$mode" = "github" ]; then
     step "Pushing to GitHub..."
     if ! git push -u origin HEAD -q 2>&1; then
-      printf "${RED}FAILED${NC}\n"
+      if [ "$JSON_OUTPUT" != true ]; then printf "${RED}FAILED${NC}\n"; fi
       warn "Push failed. Check your GitHub authentication and network."
       log "Push failed"
       return 1
     fi
-    printf "${GREEN}✓${NC}\n"
+    if [ "$JSON_OUTPUT" != true ]; then printf "${GREEN}✓${NC}\n"; fi
     log "Backup pushed successfully"
+    json_pushed=true
   else
     log "Backup committed locally (local mode — no push)"
   fi
 
-  printf "\n${GREEN}${BOLD}Done!${NC} Backup complete.\n"
+  if [ "$JSON_OUTPUT" = true ]; then
+    local sessions_json="null"
+    if [ "$sync_sessions_tier" = true ]; then
+      sessions_json=$(printf '{"added":%s,"updated":%s,"removed":%s}' "$json_added" "$json_updated" "$json_removed")
+    fi
+    printf '{"ok":true,"config":{"filesSynced":%s},"sessions":%s,"pushed":%s}\n' \
+      "$json_config_count" "$sessions_json" "$json_pushed"
+  else
+    printf "\n${GREEN}${BOLD}Done!${NC} Backup complete.\n"
+  fi
 }
 cmd_status() {
   local mode
