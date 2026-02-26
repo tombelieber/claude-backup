@@ -316,6 +316,58 @@ sync_config() {
   echo "$config_added"
 }
 
+# Portable byte-count helper (macOS has no du -sb)
+dir_bytes() {
+  find "$1" -type f -exec stat -f %z {} + 2>/dev/null | awk '{s+=$1}END{print s+0}'
+}
+
+write_manifest() {
+  local config_files=0 config_size=0
+  local session_files=0 session_projects=0 session_size=0 session_uncompressed=0
+
+  if [ -d "$CONFIG_DEST" ]; then
+    config_files=$(find "$CONFIG_DEST" -type f 2>/dev/null | wc -l | tr -d ' ')
+    config_size=$(dir_bytes "$CONFIG_DEST")
+  fi
+
+  if [ -d "$DEST_DIR" ]; then
+    session_files=$(find "$DEST_DIR" -name "*.gz" -type f 2>/dev/null | wc -l | tr -d ' ')
+    session_projects=$(find "$DEST_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
+    session_size=$(dir_bytes "$DEST_DIR")
+  fi
+
+  if [ -d "$SOURCE_DIR" ]; then
+    session_uncompressed=$(dir_bytes "$SOURCE_DIR")
+  fi
+
+  # Extract username from git remote URL (no network call — works offline)
+  # Handles both HTTPS (https://github.com/user/repo) and SSH (git@github.com:user/repo)
+  local cached_user
+  cached_user=$(cd "$BACKUP_DIR" && git remote get-url origin 2>/dev/null \
+    | sed 's|https://[^/]*/\([^/]*\)/.*|\1|; s|git@[^:]*:\([^/]*\)/.*|\1|' \
+    | grep -E '^[a-zA-Z0-9._-]+$' \
+    || echo "unknown")
+
+  cat > "$BACKUP_DIR/manifest.json" <<MANIFEST
+{
+  "version": "$VERSION",
+  "machine": "$(hostname)",
+  "user": "$cached_user",
+  "lastSync": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')",
+  "config": {
+    "files": $config_files,
+    "sizeBytes": $config_size
+  },
+  "sessions": {
+    "files": $session_files,
+    "projects": $session_projects,
+    "sizeBytes": $session_size,
+    "uncompressedBytes": $session_uncompressed
+  }
+}
+MANIFEST
+}
+
 cmd_sync() {
   # Prevent concurrent sync operations (atomic via mkdir)
   local lock_dir="$BACKUP_DIR/.sync.lock"
