@@ -1,14 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="1.0.0"
+VERSION="2.0.0"
 BACKUP_DIR="$HOME/.claude-backup"
 SOURCE_DIR="$HOME/.claude/projects"
+CLAUDE_DIR="$HOME/.claude"
 DEST_DIR="$BACKUP_DIR/projects"
+CONFIG_DEST="$BACKUP_DIR/config"
 LOG_FILE="$BACKUP_DIR/backup.log"
 PLIST_NAME="com.claude-backup.plist"
 PLIST_PATH="$HOME/Library/LaunchAgents/$PLIST_NAME"
 DATA_REPO_NAME="claude-backup-data"
+
+# Config files/dirs to back up (relative to ~/.claude/)
+CONFIG_ITEMS=(
+  "settings.json"
+  "settings.local.json"
+  "CLAUDE.md"
+  "agents"
+  "hooks"
+  "skills"
+  "rules"
+)
+
+# NEVER backup these (hardcoded, not configurable)
+SENSITIVE_PATTERNS=(
+  ".credentials.json"
+  ".encryption_key"
+)
 
 # Colors (if terminal supports it)
 if [ -t 1 ]; then
