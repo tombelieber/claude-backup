@@ -36,7 +36,12 @@ Claude Backup provides two-tier protection for your Claude Code environment:
 | `claude-backup export-config` | Export config as portable tarball |
 | `claude-backup import-config <file>` | Import config from tarball |
 | `claude-backup import-config <file> --force` | Import config, overwriting existing files |
-| `claude-backup restore <UUID>` | Restore a session |
+| `claude-backup restore --list` | List all backed-up sessions |
+| `claude-backup restore --last N` | List last N sessions |
+| `claude-backup restore --date YYYY-MM-DD` | Filter by UTC date |
+| `claude-backup restore --project NAME` | Filter by project name |
+| `claude-backup restore <uuid>` | Restore a specific session |
+| `claude-backup restore <uuid> --force` | Overwrite existing session |
 | `claude-backup uninstall` | Remove scheduler and optionally delete data |
 
 ## Machine Migration
@@ -55,6 +60,32 @@ npx claude-backup import-config claude-config-2026-02-25.tar.gz
 ```
 
 Plugins are not included in the export (they are re-downloaded on first launch). Only the plugin manifest in `settings.json` is backed up.
+
+## Session Restore
+
+Browse and restore individual sessions from your backups.
+
+```bash
+# List all backed-up sessions
+claude-backup restore --list
+
+# Show only the last 5 sessions
+claude-backup restore --last 5
+
+# Filter by date (UTC)
+claude-backup restore --date 2026-02-27
+
+# Filter by project name (partial match)
+claude-backup restore --project myproject
+
+# Restore a specific session
+claude-backup restore <uuid>
+
+# Overwrite if session already exists locally
+claude-backup restore <uuid> --force
+```
+
+The session index (`session-index.json`) is auto-generated on every sync. It is gitignored and rebuilt from the `*.jsonl.gz` files each time — you never need to manage it manually. Dates in the index and `--date` filter use UTC.
 
 ## What's Backed Up
 
@@ -106,6 +137,7 @@ All source paths are relative to `~/.claude/`.
 │   ├── hooks/
 │   ├── skills/
 │   └── rules/
+├── session-index.json              # Auto-generated, gitignored
 ├── projects/                       # Sessions (gzipped)
 │   ├── -Users-foo-myproject/
 │   │   ├── session-abc.jsonl.gz
@@ -136,7 +168,7 @@ gh repo delete claude-backup-data
 
 - Linux support (systemd timer)
 - Cloud backup backends
-- Session browser and search
+- Session encryption (age)
 
 ## License
 
