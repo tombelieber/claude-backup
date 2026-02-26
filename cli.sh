@@ -8,8 +8,8 @@ CLAUDE_DIR="$HOME/.claude"
 DEST_DIR="$BACKUP_DIR/projects"
 CONFIG_DEST="$BACKUP_DIR/config"
 LOG_FILE="$BACKUP_DIR/backup.log"
-PLIST_NAME="com.claude-backup.plist"
-PLIST_PATH="$HOME/Library/LaunchAgents/$PLIST_NAME"
+SERVICE_LABEL="com.claude-backup"
+PLIST_PATH="$HOME/Library/LaunchAgents/com.claude-backup.plist"
 DATA_REPO_NAME="claude-backup-data"
 
 # Config files/dirs to back up (relative to ~/.claude/)
@@ -170,7 +170,7 @@ schedule_launchd() {
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>$PLIST_NAME</string>
+    <string>$SERVICE_LABEL</string>
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
@@ -197,8 +197,9 @@ schedule_launchd() {
 </plist>
 PLIST
 
-  launchctl unload "$PLIST_PATH" 2>/dev/null || true
-  launchctl load "$PLIST_PATH"
+  local domain="gui/$(id -u)"
+  launchctl bootout "$domain/$SERVICE_LABEL" 2>/dev/null || true
+  launchctl bootstrap "$domain" "$PLIST_PATH"
 }
 
 # --- Subcommands ---
@@ -211,7 +212,7 @@ cmd_init() {
     info "Already initialized at $BACKUP_DIR"
     local mode
     mode=$(read_backup_mode)
-    if [ "$mode" = "github" ]; then
+    if [ "$mode" != "local" ]; then
       local remote_url
       remote_url=$(cd "$BACKUP_DIR" && git remote get-url origin 2>/dev/null || echo "unknown")
       printf "  ${DIM}Remote: ${remote_url}${NC}\n"
@@ -277,7 +278,7 @@ cmd_init() {
 
   if [ ! -d ".git" ]; then
     git init -q -b main
-    if [ "$BACKUP_MODE" = "github" ]; then
+    if [ "$BACKUP_MODE" != "local" ]; then
       git remote add origin "https://github.com/$GH_USER/$DATA_REPO_NAME.git"
     fi
   fi
@@ -398,6 +399,22 @@ read_backup_mode() {
   fi
 }
 
+machine_slug() {
+  # Compute a filesystem-safe slug from the short hostname
+  hostname -s | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' | cut -c1-64
+}
+
+get_machine_slug() {
+  # Read from manifest if available (stable across hostname renames), else compute
+  local stored
+  stored=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('machineSlug',''))" "$BACKUP_DIR/manifest.json" 2>/dev/null)
+  if [ -n "$stored" ]; then
+    echo "$stored"
+  else
+    machine_slug
+  fi
+}
+
 write_manifest() {
   local config_files=0 config_size=0
   local session_files=0 session_projects=0 session_size=0 session_uncompressed=0
@@ -422,7 +439,7 @@ write_manifest() {
 
   # Extract username from git remote URL (no network call — works offline)
   local cached_user="local"
-  if [ "$mode" = "github" ]; then
+  if [ "$mode" != "local" ]; then
     cached_user=$(cd "$BACKUP_DIR" && git remote get-url origin 2>/dev/null \
       | sed 's|https://[^/]*/\([^/]*\)/.*|\1|; s|git@[^:]*:\([^/]*\)/.*|\1|' \
       | grep -E '^[a-zA-Z0-9._-]+$' \
@@ -703,8 +720,8 @@ cmd_sync() {
   if [ "$JSON_OUTPUT" != true ]; then printf "${GREEN}✓${NC}\n"; fi
 
   local mode="${BACKUP_MODE:-$(read_backup_mode)}"
-  if [ "$mode" = "github" ]; then
-    step "Pushing to GitHub..."
+  if [ "$mode" != "local" ]; then
+    step "Pushing to remote..."
     local push_output
     if ! push_output=$(git push -u origin HEAD -q 2>&1); then
       if [ "$JSON_OUTPUT" != true ]; then printf "${RED}FAILED${NC}\n"; fi
@@ -749,8 +766,8 @@ cmd_status() {
   # Mode
   printf "  ${BOLD}Mode:${NC}        $mode\n"
 
-  # Remote URL (github mode only)
-  if [ "$mode" = "github" ]; then
+  # Remote URL (remote modes only)
+  if [ "$mode" != "local" ]; then
     local remote_url
     remote_url=$(cd "$BACKUP_DIR" && git remote get-url origin 2>/dev/null || echo "unknown")
     printf "  ${BOLD}Repo:${NC}        $remote_url\n"
@@ -794,7 +811,7 @@ cmd_status() {
   fi
 
   # Scheduler status
-  if launchctl list "$PLIST_NAME" &>/dev/null; then
+  if launchctl list "$SERVICE_LABEL" &>/dev/null; then
     printf "  ${BOLD}Scheduler:${NC}   ${GREEN}active${NC} (daily at 3:00 AM)\n"
   else
     printf "  ${BOLD}Scheduler:${NC}   ${YELLOW}inactive${NC}\n"
@@ -821,7 +838,7 @@ cmd_status_json() {
   fi
 
   local repo="null"
-  if [ "$mode" = "github" ]; then
+  if [ "$mode" != "local" ]; then
     local remote_url
     remote_url=$(cd "$BACKUP_DIR" && git remote get-url origin 2>/dev/null || echo "")
     if [ -n "$remote_url" ]; then
@@ -851,7 +868,7 @@ cmd_status_json() {
   fi
 
   local scheduler="inactive"
-  if launchctl list "$PLIST_NAME" &>/dev/null; then
+  if launchctl list "$SERVICE_LABEL" &>/dev/null; then
     scheduler="active"
   fi
 
@@ -861,8 +878,9 @@ cmd_status_json() {
     index_sessions=$(python3 -c "import json,sys; print(len(json.load(open(sys.argv[1])).get('sessions',[])))" "$index_file" 2>/dev/null || echo "0")
   fi
 
-  printf '{"version":"%s","mode":"%s","repo":%s,"lastBackup":"%s","backupSize":"%s","config":{"files":%s,"size":"%s"},"sessions":{"files":%s,"projects":%s,"size":"%s"},"scheduler":"%s","index":{"sessions":%s}}\n' \
+  printf '{"version":"%s","mode":"%s","repo":%s,"lastBackup":"%s","backupSize":"%s","machine":"%s","machineSlug":"%s","config":{"files":%s,"size":"%s"},"sessions":{"files":%s,"projects":%s,"size":"%s"},"scheduler":"%s","index":{"sessions":%s}}\n' \
     "$VERSION" "$mode" "$repo" "$last_backup" "$backup_size" \
+    "$(json_escape "$(hostname)")" "$(get_machine_slug)" \
     "$config_files" "$config_size" "$session_files" "$session_projects" "$session_size" \
     "$scheduler" "$index_sessions"
 }
@@ -1193,7 +1211,8 @@ cmd_uninstall() {
 
   # Remove launchd schedule
   if [ -f "$PLIST_PATH" ]; then
-    launchctl unload "$PLIST_PATH" 2>/dev/null || true
+    local domain="gui/$(id -u)"
+    launchctl bootout "$domain/$SERVICE_LABEL" 2>/dev/null || true
     rm -f "$PLIST_PATH"
     info "Removed daily schedule"
   else
