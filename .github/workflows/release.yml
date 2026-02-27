@@ -10,7 +10,7 @@ jobs:
     name: Publish to npm
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       id-token: write
     steps:
       - name: Checkout
@@ -52,3 +52,9 @@ jobs:
 
       - name: Publish
         run: npm publish --access public
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_REF: ${{ github.ref_name }}
+        run: gh release create "$TAG_REF" --generate-notes --latest
