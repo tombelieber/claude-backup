@@ -27,11 +27,11 @@ for flag in --json --config-only --sessions-only --list --last --date --project 
   check "flag" "$flag" "$SKILL"
 done
 
-# Version quad check: cli.sh, package.json, plugin.json, marketplace.json must match
+# Version triple check: cli.sh, package.json, plugin.json must match
+# (marketplace.json defers to plugin.json — no version field there)
 CLI_VER=$(sed -n 's/^VERSION="\([^"]*\)"/\1/p' "$CLI")
 PKG_VER=$(python3 -c "import json; print(json.load(open('package.json'))['version'])")
 PLUGIN_VER=$(python3 -c "import json; print(json.load(open('.claude-plugin/plugin.json'))['version'])")
-MKT_VER=$(python3 -c "import json; print(json.load(open('.claude-plugin/marketplace.json'))['plugins'][0]['version'])")
 
 if [ "$CLI_VER" != "$PKG_VER" ]; then
   echo "VERSION MISMATCH: cli.sh=$CLI_VER, package.json=$PKG_VER"
@@ -39,10 +39,6 @@ if [ "$CLI_VER" != "$PKG_VER" ]; then
 fi
 if [ "$CLI_VER" != "$PLUGIN_VER" ]; then
   echo "VERSION MISMATCH: cli.sh=$CLI_VER, plugin.json=$PLUGIN_VER"
-  ((ERRORS++)) || true
-fi
-if [ "$CLI_VER" != "$MKT_VER" ]; then
-  echo "VERSION MISMATCH: cli.sh=$CLI_VER, marketplace.json=$MKT_VER"
   ((ERRORS++)) || true
 fi
 
