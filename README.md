@@ -191,7 +191,7 @@ claude-backup restore --all --force     # overwrite existing sessions
 Let Claude manage backups for you — no `npm install` needed:
 
 ```bash
-/plugin marketplace add https://github.com/tombelieber/claude-backup
+/plugin marketplace add tombelieber/claude-backup
 /plugin install claude-backup@claude-backup
 ```
 

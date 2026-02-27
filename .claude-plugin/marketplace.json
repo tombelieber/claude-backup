@@ -6,7 +6,10 @@
   "plugins": [
     {
       "name": "claude-backup",
-      "source": "./",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/tombelieber/claude-backup.git"
+      },
       "description": "Back up and restore your Claude Code environment"
     }
   ]
