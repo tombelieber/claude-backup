@@ -2,3 +2,7 @@ node_modules/
 .DS_Store
 .tmp/
 *.tgz
+
+# Claude Code local config (private)
+.claude/
+CLAUDE.md
