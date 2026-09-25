@@ -6,3 +6,4 @@ node_modules/
 # Claude Code local config (private)
 .claude/
 CLAUDE.md
+docs/plans/
